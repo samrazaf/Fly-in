@@ -6,7 +6,7 @@
 #  By: samrazaf <samrazaf@student.42antananari   +#+  +:+       +#+         #
 #                                              +#+#+#+#+#+   +#+            #
 #  Created: 2026/11/17 15:54:19 by samrazaf        #+#    #+#               #
-#  Updated: 2026/11/17 17:15:18 by samrazaf        ###   ########.fr        #
+#  Updated: 2026/11/18 17:24:13 by samrazaf        ###   ########.fr        #
 #                                                                           #
 # ************************************************************************* #
 
@@ -19,14 +19,22 @@ class ParseError:
 
 hub_type = Literal["start_hub:", "end_hub:"]
 
-class ValidationParser(BaseModel):
-    nb_drone: int = Field(gt=0)
+class ValidationParser_peak(BaseModel):
     hub_peak: tuple[
         hub_type,
         str,
         int,
         int,
-        Annotated[str, Field(pattern=r"^\[color=\S+\]$")]
+        Annotated[str, Field(pattern=r"^\[color=[^.,\s]+\]$")]
+    ]
+
+class ValidationParser_hub(BaseModel):
+    hub_peak: tuple[
+        Annotated[str, Field(pattern=(r"^hub: $"))],
+        str,
+        int,
+        int,
+        Annotated[str, Field(pattern=(r"^\[zone=[^.,\s\d]+\scolor=[^.,\s\d]+( max_drones=\d+)?\]$"))]
     ]
 
 
@@ -38,14 +46,13 @@ class ValidationParser(BaseModel):
 
 if __name__ == "__main__":
     try:
-        test = ValidationParser(
-            nb_drone=2,
+        test = ValidationParser_hub(
             hub_peak=(
-            "start_hub:",
-            "hub",
-            2,
-            5,
-            "[color=green]"
+            "hub: ",
+            "roof",
+            3,
+            4,
+            "[zone=normal color=green max_drones=5]"
             ))
         print(test.model_dump())
     except Exception:
