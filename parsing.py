@@ -6,54 +6,222 @@
 #  By: samrazaf <samrazaf@student.42antananari   +#+  +:+       +#+         #
 #                                              +#+#+#+#+#+   +#+            #
 #  Created: 2026/11/17 15:54:19 by samrazaf        #+#    #+#               #
-#  Updated: 2026/11/18 17:24:13 by samrazaf        ###   ########.fr        #
+#  Updated: 2026/11/22 16:48:28 by samrazaf        ###   ########.fr        #
 #                                                                           #
 # ************************************************************************* #
 
-from pydantic import BaseModel, Field
-from typing import Annotated, Literal
+from pydantic import BaseModel, ValidationError, Field
+from typing import Annotated
+import pathlib
+import regex as re
 
-class ParseError:
-    def __init__(self, msg):
+
+class ParseError(Exception):
+    def __init__(self, msg="Invalid data"):
         pass
 
-hub_type = Literal["start_hub:", "end_hub:"]
 
-class ValidationParser_peak(BaseModel):
-    hub_peak: tuple[
-        hub_type,
-        str,
-        int,
-        int,
-        Annotated[str, Field(pattern=r"^\[color=[^.,\s]+\]$")]
-    ]
-
-class ValidationParser_hub(BaseModel):
-    hub_peak: tuple[
-        Annotated[str, Field(pattern=(r"^hub: $"))],
-        str,
-        int,
-        int,
-        Annotated[str, Field(pattern=(r"^\[zone=[^.,\s\d]+\scolor=[^.,\s\d]+( max_drones=\d+)?\]$"))]
-    ]
+class ValidatorParserDrone(BaseModel):
+    drone: Annotated[str, Field(pattern=(
+        r"^nb_drones:"
+        r"\x20"
+        r"(?:[+])?\d+"
+        r"(?:\s*#+.*)?$"
+    ))]
 
 
-#class Parsing:
-#    def read_file(path):
-#        with open(path, "r", encoding="utf-8"):
+class ValidatorParserHub(BaseModel):
+    hub: Annotated[str,
+                  Field(pattern=(
+                      r"^(?:start_hub|hub|end_hub):"
+                      r"\x20"
+                      r"[^\W_]+"
+                      r"\x20"
+                      r"(?:[+-])?\d+"
+                      r"\x20"
+                      r"(?:[+-])?\d+"
+                      r"(?:\s*#+.*|"
+                      r"(?:"
+                      r"\x20"
+                      r"\["
+                      r"(?:(?:zone|color)=[a-zA-Z_-]+"
+                      r"|max_drones=\d+)"
+                      r"(?:\x20(?:(?:zone|color)=[a-zA-Z_-]+"
+                      r"|max_drones=\d+)){0,2}"
+                      r"\](?:\s*#+.*)?"
+                      r")?)$"
+                      ))]
 
+
+class ValidatorParserConnection(BaseModel):
+    connection: Annotated[str,
+                          Field(pattern=(
+                              r"^connection:\x20"
+                              r"[^\W_]+"
+                              r"-"
+                              r"[^\W_]+"
+                              r"(?:\s*#+.*|"
+                              r"(?:"
+                              r"\x20"
+                              r"\["
+                              r"max_link_capacity=\d+"
+                              r"\](?:\s*#+.*)?"
+                              r")?)$"
+                              ))]
+
+
+class Parsing:
+    def read_file(self, path: str | pathlib.Path) -> str:
+        try:
+            with open(path, "r", encoding="utf-8") as file:
+                data = file.read()
+            return data
+        except OSError as error:
+            raise ParseError(f"[ERROR] : {error}")
+
+    def check_line(self, data: str) -> bool:
+        s = []
+        for number, line in enumerate(data.splitlines(), start=1):
+            line = line.strip()
+            if line == "" or line.startswith('#'):
+                continue
+            s.append(line)
+            if s[0]:
+                first_line = s[0]
+                if first_line.startswith("nb_drones:"):
+                    return True
+                else:
+                    raise ParseError(f"[ERROR] of line {number} == "
+                                     "first line must be "
+                                     "define NUMBER OF DRONES")
+
+    def check_duplicate_line(self, data) -> bool:
+        inventory = {}
+        avalaible = ["nb_drones", "start_hub", "end_hub"]
+        for number, line in enumerate(data.splitlines(), start=1):
+            line = line.strip()
+            if line == "" or line.startswith('#'):
+                continue
+            if line.startswith(avalaible[0] + ':'):
+                inventory[number] = line.split(':')[0]
+            if line.startswith(avalaible[1] + ':'):
+                inventory[number] = line.split(':')[0]
+            if line.startswith(avalaible[2] + ':'):
+                inventory[number] = line.split(':')[0]
+        if len(inventory) > 3:
+            x, y, z = 0, 0, 0
+            for value, num in inventory.items():
+                if value == avalaible[0]:
+                    x += 1
+                if value == avalaible[1]:
+                    y += 1
+                if value == avalaible[2]:
+                    z += 1
+            reps = max(x, y, z)
+            if reps ==  x:
+                check = avalaible[0]
+            elif reps ==  y:
+                check = avalaible[1]
+            elif reps ==  z:
+                check = avalaible[2]
+            num = [
+                number for number, value in inventory.items()
+                if value == check
+            ]
+            num = str(num)
+            num = num.replace(',', ' and').replace('[', "").replace(']', '')
+            raise ParseError(f"[ERROR] REBOUD of '{check}' in line "
+                             f"{num}")
+        return True
+
+    def complete_params(self, data: str) -> bool:
+        inventory = []
+        avalaible = ["nb_drones", "start_hub", "end_hub"]
+        for line in data.splitlines():
+            line = line.strip()
+            if line == "" or line.startswith('#'):
+                continue
+            if line.startswith(avalaible[0] + ':'):
+                inventory.append(line.split(':')[0])
+            if line.startswith(avalaible[1] + ':'):
+                inventory.append(line.split(':')[0])
+            if line.startswith(avalaible[2] + ':'):
+                inventory.append(line.split(':')[0])
+        set_inv = set(inventory)
+        set_ava = set(avalaible)
+        if set_inv != set_ava:
+            diff = set_ava - set_inv
+            raise ParseError(f"[ERROR] {diff} is not defined")
+        return True
+
+    def check_hub(self, data: str, number: int) -> bool:
+        value = re.findall(r"(zone|color|max_drones)=", data)
+        check = set(value)
+        if len(value) != len(check):
+            raise ParseError(f"[ERROR] of line {number} == Meta"
+                             f" data REBOUD: '{data}'")
+        return True
+
+    def check_zone(self, data: str, number: int) -> bool:
+        if re.findall(r"(zone)", data):
+            pass
+        else:
+            return True
+        if re.findall(r"(zone=(restricted|normal|blocked|priority))", data):
+            return True
+        else:
+            raise ParseError(f"[ERROR] of line {number} =="
+                             f" unknown zone type: {data!r}")
+
+    def primary_check_data(self, data,
+                           valid_drones: type[ValidatorParserDrone],
+                           valid_hub: type[ValidatorParserHub],
+                           valid_connection: type[ValidatorParserConnection]
+                           ) -> bool:
+        if data == "":
+            raise ParseError(f"Data invalid")
+
+        hub_type = ("start_hub", "end_hub", "hub")
+
+        if self.check_line(data):
+            pass
+
+        if self.complete_params(data):
+            pass
+
+        if self.check_duplicate_line(data):
+            pass
+
+        for number, line in enumerate(data.splitlines(), start=1):
+            new_line = line.strip()
+            if new_line == "" or new_line.startswith('#'):
+                continue
+            try:
+                if new_line.startswith("nb_drones:"):
+                    valid_drones(drone=line)
+                elif new_line.startswith("connection:"):
+                    valid_connection(connection=line)
+                elif new_line.startswith(hub_type):
+                    valid_hub(hub=line)
+                    self.check_hub(new_line, number)
+                    self.check_zone(new_line, number)
+                else:
+                    raise ParseError(f"[ERROR] of line: {number} == unknown"
+                                     f" type of line '{line}'")
+            except ValidationError as error:
+                raise ParseError(f"[ERROR] of line: {number} == invalid"
+                                 f" format: {line!r}") from error
+        return True
 
 
 if __name__ == "__main__":
     try:
-        test = ValidationParser_hub(
-            hub_peak=(
-            "hub: ",
-            "roof",
-            3,
-            4,
-            "[zone=normal color=green max_drones=5]"
-            ))
-        print(test.model_dump())
-    except Exception:
-        print("error")
+        test = Parsing()
+        valid_drone = ValidatorParserDrone
+        valid_hub = ValidatorParserHub
+        valid_connection = ValidatorParserConnection
+        data = test.read_file("config.txt")
+        test.primary_check_data(data, valid_drone, valid_hub, valid_connection)
+
+    except BaseException as error:
+        print(error)
