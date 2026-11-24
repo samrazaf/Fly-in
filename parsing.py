@@ -6,7 +6,7 @@
 #  By: samrazaf <samrazaf@student.42antananari   +#+  +:+       +#+         #
 #                                              +#+#+#+#+#+   +#+            #
 #  Created: 2026/11/17 15:54:19 by samrazaf        #+#    #+#               #
-#  Updated: 2026/11/24 14:34:37 by samrazaf        ###   ########.fr        #
+#  Updated: 2026/11/24 16:40:42 by samrazaf        ###   ########.fr        #
 #                                                                           #
 # ************************************************************************* #
 
@@ -72,7 +72,7 @@ class ValidatorParserConnection(BaseModel):
                               ))]
 
 
-class Parsing:
+class ParsingValidator:
     def read_file(self, path: str | pathlib.Path) -> str:
         try:
             with open(path, "r", encoding="utf-8") as file:
@@ -197,13 +197,12 @@ class Parsing:
     def check_connection(self, data: str, line: str, number: int) -> bool:
         hub = re.findall(r"^(hub|start_hub|end_hub):"
                          r"\x20(\w+[^\s])", data, re.MULTILINE)
-        #print(hub)
         value: list[str] = []
         for i in hub:
             _, y = i
             value.append(y)
-        hub_connection = re.findall(r"^connection:\x20([^-\20].*)-([^-\x20].*)", line)
-        print(hub_connection)
+        hub_connection = re.findall(r"^connection:\x20"
+                                    r"([^-\20].*)-([\S]+)", line)
         for hub_value in hub_connection:
             a, b = hub_value
             if a not in value or b not in value:
@@ -211,30 +210,59 @@ class Parsing:
                                  f" or indefined hub name {line!r}")
         return True
 
-    def check_duplicate_connection(self, data: str, line: str, number: int) -> bool:
-        connection = re.findall(r"^connection:\x20([^-\x20].*)-([^-\x20].*)\s*", data, re.MULTILINE)
-        connection_line = re.findall(r"^connection:\x20([^-\x20].*)-([^-\x20].*)\s*", line)
+    def check_duplicate_connection(self, data: str, line: str,
+                                   number: int) -> bool:
+        connection = re.findall(r"^connection:\x20([^-\x20].*)"
+                                r"-([\S]+)", data, re.MULTILINE)
+        connection_line = re.findall(r"^connection:\x20([^-\x20].*)"
+                                     r"-([\S]+)", line)
         count: int = 0
-        print(connection)
-        #print("test:",connection_line)
         x, y = connection_line[0]
         if x == y:
             raise ParseError(f"[ERROR] in line {number} == connection"
-                                f" rebound in one zone {line!r}")
+                             f" rebound in one zone {line!r}")
         for connex in connection:
             prim, second = connex
-            if (str(prim)+str(second) == str(x)+str(y)) or str(prim)+str(second) == str(y)+str(x):
+            if ((str(prim)+str(second) == str(x)+str(y))
+               or str(prim)+str(second) == str(y)+str(x)):
                 count += 1
         if count > 1:
             raise ParseError(f"[ERROR] in line {number} == connection"
                              f" rebound in two zone {line!r}")
         return True
 
-    def primary_check_data(self, data: str,
-                           valid_drones: type[ValidatorParserDrone],
-                           valid_hub: type[ValidatorParserHub],
-                           valid_connection: type[ValidatorParserConnection]
-                           ) -> bool:
+    def check_duplicate_hub_name(self, data: str) -> bool:
+        names = re.findall(r"^(hub|start_hub|end_hub):\x20([\S]+)",
+                           data, re.MULTILINE)
+        list_name = []
+        value = []
+        for name in names:
+            _, hub_name = name
+            list_name.append(hub_name)
+        set_hub_name = set(list_name)
+        list_hub = list(set_hub_name)
+        if len(set_hub_name) != len(list_name):
+            diff = [x for x in list_hub if list_name.count(x) > 1]
+            for number, line in enumerate(data.splitlines(), start=1):
+                new_line = line.strip()
+                if new_line == "" or new_line.startswith('#'):
+                    continue
+                if re.findall(r"^(?:hub|start_hub|end_hub):"
+                              rf"\x20{re.escape(diff[0])}",
+                              line) != []:
+                    value.append(number)
+            string = (str(value).replace("[", "")
+                      .replace("]", "").replace(",", " and"))
+            if value != []:
+                raise ParseError(f"[ERROR] in line {string} =="
+                                 f" name of hub rebound '{diff[0]}'")
+        return True
+
+    def check_data(self, data: str,
+                   valid_drones: type[ValidatorParserDrone],
+                   valid_hub: type[ValidatorParserHub],
+                   valid_connection: type[ValidatorParserConnection]
+                   ) -> bool:
         if data == "":
             raise ParseError("Data invalid")
 
@@ -249,6 +277,9 @@ class Parsing:
         if self.check_duplicate_line(data):
             pass
 
+        if self.check_duplicate_hub_name(data):
+            pass
+
         for number, line in enumerate(data.splitlines(), start=1):
             new_line = line.strip()
             if new_line == "" or new_line.startswith('#'):
@@ -258,7 +289,7 @@ class Parsing:
                     valid_drones(drone=line)
                 elif new_line.startswith("connection:"):
                     valid_connection(connection=line)
-                    #self.check_connection(data, line, number)
+                    self.check_connection(data, line, number)
                     self.check_duplicate_connection(data, line, number)
                 elif new_line.startswith(hub_type):
                     valid_hub(hub=line)
@@ -273,33 +304,15 @@ class Parsing:
                                  f" format: {line!r}") from error
         return True
 
-    def pick_all_data(self, data: str) -> tuple[str, list[str], list[str]]:
-        nb_drones: str = ""
-        connection: list[str] = []
-        hub: list[str] = []
-        inventory = {}
-        for line in data.splitlines():
-            line = line.strip()
-            if line == "" or line.startswith('#'):
-                continue
-            if line.startswith("nb_drones:"):
-                new = line.split(":")
-                inventory[new[0]] = new[1].strip()
-            elif line.startswith("connection:"):
-                new = line.split(" ")
-                print(new)
-            else:
-                hub.append(line)
-        return inventory
 
 if __name__ == "__main__":
     try:
-        test = Parsing()
+        test = ParsingValidator()
         valid_drone = ValidatorParserDrone
         valid_hub = ValidatorParserHub
         valid_connection = ValidatorParserConnection
         data = test.read_file("config.txt")
-        test.primary_check_data(data, valid_drone, valid_hub, valid_connection)
+        test.check_data(data, valid_drone, valid_hub, valid_connection)
         #value = test.pick_all_data(data)
         #print(value)
     except BaseException as error:
