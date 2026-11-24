@@ -6,7 +6,7 @@
 #  By: samrazaf <samrazaf@student.42antananari   +#+  +:+       +#+         #
 #                                              +#+#+#+#+#+   +#+            #
 #  Created: 2026/11/17 15:54:19 by samrazaf        #+#    #+#               #
-#  Updated: 2026/11/23 17:13:55 by samrazaf        ###   ########.fr        #
+#  Updated: 2026/11/24 14:34:37 by samrazaf        ###   ########.fr        #
 #                                                                           #
 # ************************************************************************* #
 
@@ -25,7 +25,7 @@ class ValidatorParserDrone(BaseModel):
     drone: Annotated[str, Field(pattern=(
         r"^nb_drones:"
         r"\x20"
-        r"(?:[+])?\d+"
+        r"(?:[+])?0*[1-9]\d*"
         r"(?:\s*#+.*)?$"
     ))]
 
@@ -96,6 +96,7 @@ class Parsing:
                     raise ParseError(f"[ERROR] of line {number} == "
                                      "first line must be "
                                      "define NUMBER OF DRONES")
+        return False
 
     def check_duplicate_line(self, data) -> bool:
         inventory = {}
@@ -168,17 +169,19 @@ class Parsing:
         return True
 
     def check_duplicate_pos(self, data: str, line: str, number: int) -> bool:
-        new_line = line
-        if re.search(r"#", line):
-            new_line = line.split("#")[0]
-        value = re.findall(r"\d+\x20\d+", new_line)
-        hub_pos = re.findall(r"^[^#].+:\x20.+(\d+\x20\d+)", data, re.MULTILINE)
-        set_val = set(value)
-        set_hub = set(hub_pos)
-        if set_val != set_val:
-            diff = set_val - set_hub
-            raise ParseError(f"[ERROR] of line {number}")
-        print(hub_pos)
+        hub_pos = re.findall(r"^(hub|start_hub|end_hub):"
+                             r"\x20[^-\x20]+\x20(\d+\x20\d+)",
+                             data, re.MULTILINE)
+        line_pos = re.findall(r"^(hub|start_hub|end_hub):"
+                              r"\x20[^-\x20]+\x20(\d+\x20\d+)", line)
+        count = 0
+        for new_pos in hub_pos:
+            if new_pos in line_pos:
+                count += 1
+        if count > 1:
+            raise ParseError(f"[ERROR] of line {number} == Position"
+                             f" data REBOUND: {line}")
+        return True
 
     def check_zone(self, data: str, number: int) -> bool:
         if re.findall(r"(zone)", data):
@@ -192,19 +195,42 @@ class Parsing:
                              f" unknown zone type: {data!r}")
 
     def check_connection(self, data: str, line: str, number: int) -> bool:
-        hub = re.findall(r"^(hub|start_hub|end_hub):\x20(\w+[^\s])", data, re.MULTILINE)
+        hub = re.findall(r"^(hub|start_hub|end_hub):"
+                         r"\x20(\w+[^\s])", data, re.MULTILINE)
+        #print(hub)
         value: list[str] = []
         for i in hub:
             _, y = i
             value.append(y)
-        kevin = re.findall(r"(\w+)-(\w+)", line)
-        for j in kevin:
-            a, b = j
+        hub_connection = re.findall(r"^connection:\x20([^-\20].*)-([^-\x20].*)", line)
+        print(hub_connection)
+        for hub_value in hub_connection:
+            a, b = hub_value
             if a not in value or b not in value:
                 raise ParseError(f"[ERROR] in line {number} == invalid"
                                  f" or indefined hub name {line!r}")
+        return True
 
-    def primary_check_data(self, data,
+    def check_duplicate_connection(self, data: str, line: str, number: int) -> bool:
+        connection = re.findall(r"^connection:\x20([^-\x20].*)-([^-\x20].*)\s*", data, re.MULTILINE)
+        connection_line = re.findall(r"^connection:\x20([^-\x20].*)-([^-\x20].*)\s*", line)
+        count: int = 0
+        print(connection)
+        #print("test:",connection_line)
+        x, y = connection_line[0]
+        if x == y:
+            raise ParseError(f"[ERROR] in line {number} == connection"
+                                f" rebound in one zone {line!r}")
+        for connex in connection:
+            prim, second = connex
+            if (str(prim)+str(second) == str(x)+str(y)) or str(prim)+str(second) == str(y)+str(x):
+                count += 1
+        if count > 1:
+            raise ParseError(f"[ERROR] in line {number} == connection"
+                             f" rebound in two zone {line!r}")
+        return True
+
+    def primary_check_data(self, data: str,
                            valid_drones: type[ValidatorParserDrone],
                            valid_hub: type[ValidatorParserHub],
                            valid_connection: type[ValidatorParserConnection]
@@ -232,13 +258,13 @@ class Parsing:
                     valid_drones(drone=line)
                 elif new_line.startswith("connection:"):
                     valid_connection(connection=line)
-                    self.check_connection(data, line, number)
+                    #self.check_connection(data, line, number)
+                    self.check_duplicate_connection(data, line, number)
                 elif new_line.startswith(hub_type):
                     valid_hub(hub=line)
-                    self.check_hub(new_line, number)
-                    self.check_zone(new_line, number)
-                    self.check_duplicate_pos(new_line, number)
-                    #self.pick_data_hub(line)
+                    self.check_hub(line, number)
+                    self.check_zone(line, number)
+                    self.check_duplicate_pos(data, line, number)
                 else:
                     raise ParseError(f"[ERROR] of line: {number} == unknown"
                                      f" type of line '{line}'")
@@ -262,15 +288,9 @@ class Parsing:
             elif line.startswith("connection:"):
                 new = line.split(" ")
                 print(new)
-                #inventory[new[1].strip] = tuple(int(new[2]), int(new[3]), new[4].strip())
             else:
                 hub.append(line)
         return inventory
-
-    #def pick_data_hub(self, line: list[str]) -> tuple[str, str, int, int, str, str, int]:
-    #    data = line.split(' ')[1:]
-    #    print(data)
-
 
 if __name__ == "__main__":
     try:
