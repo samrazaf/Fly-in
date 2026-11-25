@@ -6,14 +6,39 @@
 #  By: samrazaf <samrazaf@student.42antananari   +#+  +:+       +#+         #
 #                                              +#+#+#+#+#+   +#+            #
 #  Created: 2026/11/17 15:54:19 by samrazaf        #+#    #+#               #
-#  Updated: 2026/11/24 16:40:42 by samrazaf        ###   ########.fr        #
+#  Updated: 2026/11/25 15:36:43 by samrazaf        ###   ########.fr        #
 #                                                                           #
 # ************************************************************************* #
 
 from pydantic import BaseModel, ValidationError, Field
-from typing import Annotated
+from typing import Annotated, TypedDict
 import pathlib
-import regex as re
+import re
+
+
+class HubOptions(TypedDict, total=False):
+    zone: str
+    color: str
+    max_drones: int
+
+
+class HubInfo(TypedDict, total=False):
+    type: str
+    x: int
+    y: int
+    options: HubOptions
+
+
+class ConnectionInfo(TypedDict, total=False):
+    a: str
+    b: str
+    capacity: int
+
+
+class Inventory(TypedDict, total=False):
+    nb_drones: int
+    hubs: dict[str, HubInfo]
+    connections: list[ConnectionInfo]
 
 
 class ParseError(Exception):
@@ -304,6 +329,87 @@ class ParsingValidator:
                                  f" format: {line!r}") from error
         return True
 
+    def pick_data(self, data: str) -> Inventory:
+        hub_re = re.compile(
+            r"(?P<type>hub|start_hub|end_hub):\x20"
+            r"(?P<name>[^-\x20]+)\x20"
+            r"(?P<x>(?:[-+])?\d+)\x20"
+            r"(?P<y>(?:[-+])?\d+)"
+            r"(?:\x20\["
+            r"(?P<option>[^\]]+)"
+            r"\])?"
+        )
+
+        connection_re = re.compile(
+            r"connection:\x20"
+            r"(?P<a>[^-\x20]+)-"
+            r"(?P<b>[\S]+)"
+            r"(?:\x20\["
+            r"max_link_capacity="
+            r"(?P<capacity>\d+)"
+            r"\])?"
+        )
+
+        option_re = re.compile(
+            r"(?P<key>zone|color|max_drones)="
+            r"(?P<value>[^\x20]+)"
+        )
+
+        hub_type = ("start_hub", "end_hub", "hub")
+        inventory: Inventory = {}
+        hub_name: dict[str, HubInfo] = {}
+        connection: list[ConnectionInfo] = []
+        for line in data.splitlines():
+            new_line = line.strip()
+
+            if new_line == "" or new_line.startswith('#'):
+                continue
+
+            if new_line.startswith("nb_drones:"):
+                nb = new_line.split(':')
+                inventory[nb[0].strip()] = int(nb[1].strip())
+
+            elif new_line.startswith("connection:"):
+                connex = connection_re.search(new_line)
+                group_connex: dict[str, str|int] = {}
+                group_connex['a'] = connex.group("a")
+                group_connex['b'] = connex.group("b")
+
+                if connex.group("capacity"):
+                    group_connex['capacity'] = int(connex.group("capacity"))
+                else:
+                    group_connex['capacity'] = 1
+
+                connection.append(group_connex)
+
+            elif new_line.startswith(hub_type):
+                hub = hub_re.search(new_line)
+
+                option_value: dict[str, str|int] = {}
+                if hub.group("option"):
+                    for params in option_re.finditer(hub.group("option")):
+                        key = params.group("key")
+                        value = params.group("value")
+                        option_value[key] = value
+
+                if "zone" not in option_value.keys():
+                    option_value['zone'] = "normal"
+                if "color" not in option_value.keys():
+                    option_value['color'] = "none"
+                if "max_drones" not in option_value.keys():
+                    option_value['max_drones'] = 1
+
+                hub_value: dict[str, int|str|dict[str, str|int]] = {}
+                hub_value['type'] = hub.group("type")
+                hub_value['x'] = int(hub.group("x"))
+                hub_value['y'] = int(hub.group("y"))
+                hub_value['options'] = option_value
+
+                hub_name[hub.group("name")] = hub_value
+
+        inventory['hubs'] = hub_name
+        inventory['connections'] = connection
+        return inventory
 
 if __name__ == "__main__":
     try:
@@ -313,7 +419,7 @@ if __name__ == "__main__":
         valid_connection = ValidatorParserConnection
         data = test.read_file("config.txt")
         test.check_data(data, valid_drone, valid_hub, valid_connection)
-        #value = test.pick_all_data(data)
-        #print(value)
+        value = test.pick_data(data)
+        print(value)
     except BaseException as error:
         print(error)
